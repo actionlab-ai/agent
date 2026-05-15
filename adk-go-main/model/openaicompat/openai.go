@@ -49,6 +49,7 @@ import (
 	"google.golang.org/genai"
 
 	"google.golang.org/adk/model"
+	"google.golang.org/adk/model/core"
 )
 
 const (
@@ -224,7 +225,12 @@ func (m *openAICompatModel) Name() string { return m.name }
 //	并在 [DONE] 或流结束时 yield 一个非 Partial 的聚合响应，供 Runner 写入 Session。
 func (m *openAICompatModel) GenerateContent(ctx context.Context, req *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
-		openAIReq, err := buildChatCompletionRequest(m.modelName(req), req)
+		if req == nil {
+			yield(nil, fmt.Errorf("nil LLMRequest"))
+			return
+		}
+		coreReq := core.FromADKLLMRequest(m.modelName(req), req.Contents, req.Config, req.Tools)
+		openAIReq, err := buildChatCompletionRequestCore(coreReq)
 		if err != nil {
 			yield(nil, err)
 			return
@@ -703,7 +709,7 @@ func (a *streamAccumulator) FinalResponse() (*model.LLMResponse, error) {
 	return &model.LLMResponse{
 		Content:        &genai.Content{Role: genai.RoleModel, Parts: parts},
 		ModelVersion:   a.modelVersion,
-		FinishReason:   genai.FinishReason(finishReason),
+		FinishReason:   toGenAIFinishReason(finishReason),
 		TurnComplete:   true,
 		CustomMetadata: customMetadata,
 	}, nil
@@ -712,6 +718,13 @@ func (a *streamAccumulator) FinalResponse() (*model.LLMResponse, error) {
 func buildChatCompletionRequest(modelName string, req *model.LLMRequest) (chatCompletionRequest, error) {
 	if req == nil {
 		return chatCompletionRequest{}, fmt.Errorf("nil LLMRequest")
+	}
+	return buildChatCompletionRequestCore(core.FromADKLLMRequest(modelName, req.Contents, req.Config, req.Tools))
+}
+
+func buildChatCompletionRequestCore(req *core.LLMRequest) (chatCompletionRequest, error) {
+	if req == nil {
+		return chatCompletionRequest{}, fmt.Errorf("nil core LLMRequest")
 	}
 
 	messages := make([]chatMessage, 0, len(req.Contents)+1)
@@ -740,7 +753,7 @@ func buildChatCompletionRequest(modelName string, req *model.LLMRequest) (chatCo
 	}
 
 	out := chatCompletionRequest{
-		Model:    modelName,
+		Model:    req.Model,
 		Messages: messages,
 		Tools:    tools,
 		Stream:   false,
@@ -770,7 +783,7 @@ func maybeAppendContinuationPrompt(messages []chatMessage) []chatMessage {
 	return messages
 }
 
-func messagesFromContent(c *genai.Content) ([]chatMessage, error) {
+func messagesFromContent(c *core.Content) ([]chatMessage, error) {
 	if c == nil || len(c.Parts) == 0 {
 		return nil, nil
 	}
@@ -857,7 +870,7 @@ func openAIRole(role string) string {
 	}
 }
 
-func contentTextStrict(c *genai.Content) (string, error) {
+func contentTextStrict(c *core.Content) (string, error) {
 	if c == nil {
 		return "", nil
 	}
@@ -878,7 +891,7 @@ func contentTextStrict(c *genai.Content) (string, error) {
 	return strings.Join(parts, "\n"), nil
 }
 
-func toolsFromConfig(cfg *genai.GenerateContentConfig) ([]chatTool, error) {
+func toolsFromConfig(cfg *core.GenerateContentConfig) ([]chatTool, error) {
 	if cfg == nil {
 		return nil, nil
 	}
@@ -892,7 +905,7 @@ func toolsFromConfig(cfg *genai.GenerateContentConfig) ([]chatTool, error) {
 				continue
 			}
 
-			params := any(decl.ParametersJsonSchema)
+			params := any(decl.Parameters)
 			if params == nil {
 				params = map[string]any{"type": "object", "properties": map[string]any{}}
 			} else {
@@ -978,9 +991,20 @@ func toADKResponse(resp *chatCompletionResponse) (*model.LLMResponse, error) {
 			Parts: parts,
 		},
 		ModelVersion:   resp.Model,
-		FinishReason:   genai.FinishReason(finishReason),
+		FinishReason:   toGenAIFinishReason(finishReason),
 		CustomMetadata: customMetadata,
 	}, nil
+}
+
+func toGenAIFinishReason(reason string) genai.FinishReason {
+	switch strings.ToLower(reason) {
+	case "stop":
+		return genai.FinishReasonStop
+	case "length":
+		return genai.FinishReasonMaxTokens
+	default:
+		return genai.FinishReason(reason)
+	}
 }
 
 func emptyMapIfNil(m map[string]any) map[string]any {
@@ -1010,7 +1034,7 @@ func cloneJSONValue(v any) (any, error) {
 	return out, nil
 }
 
-func isEmptyPart(part *genai.Part) bool {
+func isEmptyPart(part *core.Part) bool {
 	if part == nil {
 		return true
 	}

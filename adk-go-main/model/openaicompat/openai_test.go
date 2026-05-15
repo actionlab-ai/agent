@@ -27,6 +27,7 @@ import (
 	"google.golang.org/genai"
 
 	"google.golang.org/adk/model"
+	"google.golang.org/adk/model/core"
 )
 
 func TestBuildChatCompletionRequest_TextAndSystem(t *testing.T) {
@@ -110,7 +111,7 @@ func TestMessagesFromContent_FunctionCallAndFunctionResponse(t *testing.T) {
 		}}},
 	}
 
-	callMessages, err := messagesFromContent(functionCallContent)
+	callMessages, err := messagesFromContent(core.FromGenAIContent(functionCallContent))
 	if err != nil {
 		t.Fatalf("messagesFromContent(functionCall) error = %v", err)
 	}
@@ -124,7 +125,7 @@ func TestMessagesFromContent_FunctionCallAndFunctionResponse(t *testing.T) {
 		t.Fatalf("tool call mismatch: %#v", callMessages[0].ToolCalls[0])
 	}
 
-	responseMessages, err := messagesFromContent(functionResponseContent)
+	responseMessages, err := messagesFromContent(core.FromGenAIContent(functionResponseContent))
 	if err != nil {
 		t.Fatalf("messagesFromContent(functionResponse) error = %v", err)
 	}
